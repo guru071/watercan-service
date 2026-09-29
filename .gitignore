@@ -1,0 +1,10 @@
+node_modules
+dist
+.env
+.next
+coverage
+.turbo
+apps/api/dist
+apps/customer-web/.next
+apps/admin-web/.next
+apps/delivery-web/.next

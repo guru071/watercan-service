@@ -1,0 +1,5 @@
+#!/usr/bin/expect -f
+spawn pnpm approve-builds
+expect "Choose which packages to build"
+send "\r"
+expect eof

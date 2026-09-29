@@ -1,0 +1,366 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CUSTOMER
+  ADMIN
+  SUPER_ADMIN
+  DELIVERY_AGENT
+  DELIVERY_MANAGER
+  SUPPORT
+}
+
+enum CustomerType {
+  HOME
+  ORGANIZATION
+  INDUSTRY
+}
+
+model User {
+  id            String         @id @default(uuid())
+  email         String         @unique
+  mobile        String         @unique
+  passwordHash  String
+  role          Role           @default(CUSTOMER)
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  customerProfile CustomerProfile?
+  refreshTokens   RefreshToken[]
+  auditLogs       AuditLog[]     @relation("UserAuditLogs")
+}
+
+model CustomerProfile {
+  id             String       @id @default(uuid())
+  userId         String       @unique
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName       String
+  customerType   CustomerType
+  organization   Organization?
+  addresses      Address[]
+  orders         Order[]
+  subscriptions  Subscription[]
+  notifications  Notification[]
+  
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+}
+
+model Organization {
+  id                String          @id @default(uuid())
+  customerProfileId String          @unique
+  customerProfile   CustomerProfile @relation(fields: [customerProfileId], references: [id], onDelete: Cascade)
+  
+  name              String
+  gstin             String?
+  contactPerson     String
+  designation       String?
+  industryType      String?         // Used for INDUSTRY type
+  
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+}
+
+model Address {
+  id                String          @id @default(uuid())
+  customerProfileId String
+  customerProfile   CustomerProfile @relation(fields: [customerProfileId], references: [id], onDelete: Cascade)
+  
+  addressLine1      String
+  addressLine2      String?
+  area              String
+  city              String
+  district          String
+  state             String
+  pinCode           String
+  landmark          String?
+  latitude          Float?
+  longitude         Float?
+  deliveryInstructions String?
+  isDefault         Boolean         @default(false)
+  
+  orders            Order[]
+  deliveries        DeliverySchedule[]
+  
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+}
+
+model PricingConfig {
+  id             String    @id @default(uuid())
+  canPrice       Decimal   @db.Decimal(10, 2)
+  deliveryFee    Decimal   @db.Decimal(10, 2)
+  effectiveFrom  DateTime
+  isActive       Boolean   @default(true)
+  createdBy      String    // Admin User ID
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+model PricingHistory {
+  id             String    @id @default(uuid())
+  canPrice       Decimal   @db.Decimal(10, 2)
+  deliveryFee    Decimal   @db.Decimal(10, 2)
+  effectiveFrom  DateTime
+  effectiveTo    DateTime
+  changedBy      String    // Admin User ID
+  createdAt      DateTime  @default(now())
+}
+
+enum PlanType {
+  ONE_DAY
+  WEEKLY
+  MONTHLY
+  CUSTOM
+}
+
+enum OrderStatus {
+  DRAFT
+  CALCULATED
+  PAYMENT_PENDING
+  PAYMENT_FAILED
+  PAID
+  CONFIRMED
+  SCHEDULED
+  PARTIALLY_DELIVERED
+  COMPLETED
+  CANCELLED
+}
+
+model Order {
+  id                    String          @id @default(uuid())
+  customerProfileId     String
+  customerProfile       CustomerProfile @relation(fields: [customerProfileId], references: [id])
+  addressId             String
+  address               Address         @relation(fields: [addressId], references: [id])
+  
+  planType              PlanType
+  cansPerDay            Int
+  durationDays          Int
+  totalCans             Int
+  startDate             DateTime
+  preferredDeliveryTime String?
+  
+  // Pricing Snapshot
+  canPriceAtPurchase    Decimal         @db.Decimal(10, 2)
+  deliveryFeeAtPurchase Decimal         @db.Decimal(10, 2)
+  waterCharge           Decimal         @db.Decimal(10, 2)
+  grandTotal            Decimal         @db.Decimal(10, 2)
+  
+  status                OrderStatus     @default(DRAFT)
+  
+  // Gateway details
+  razorpayOrderId       String?         @unique
+  
+  payments              Payment[]
+  deliverySchedules     DeliverySchedule[]
+  invoices              Invoice[]
+  
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+}
+
+enum PaymentStatus {
+  PENDING
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+}
+
+model Payment {
+  id                  String        @id @default(uuid())
+  orderId             String
+  order               Order         @relation(fields: [orderId], references: [id])
+  
+  amount              Decimal       @db.Decimal(10, 2)
+  currency            String        @default("INR")
+  status              PaymentStatus @default(PENDING)
+  method              String?
+  
+  razorpayPaymentId   String?       @unique
+  razorpayOrderId     String?
+  razorpaySignature   String?
+  gatewayStatus       String?
+  failureReason       String?
+  capturedAt          DateTime?
+  
+  paymentAttempts     PaymentAttempt[]
+  
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+}
+
+model PaymentAttempt {
+  id                String   @id @default(uuid())
+  paymentId         String
+  payment           Payment  @relation(fields: [paymentId], references: [id])
+  razorpayEventId   String?  @unique
+  status            String
+  payload           Json?
+  createdAt         DateTime @default(now())
+}
+
+enum SubscriptionStatus {
+  PENDING
+  ACTIVE
+  PAUSED
+  CANCELLED
+  HALTED
+  COMPLETED
+}
+
+model Subscription {
+  id                     String             @id @default(uuid())
+  customerProfileId      String
+  customerProfile        CustomerProfile    @relation(fields: [customerProfileId], references: [id])
+  
+  razorpaySubscriptionId String?            @unique
+  status                 SubscriptionStatus
+  planType               PlanType
+  currentCycle           Int                @default(1)
+  nextBillingDate        DateTime?
+  lastSuccessfulCharge   DateTime?
+  failedChargeCount      Int                @default(0)
+  cancellationDate       DateTime?
+  cancellationReason     String?
+  
+  events                 SubscriptionEvent[]
+  billingCycles          BillingCycle[]
+  
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+}
+
+model SubscriptionEvent {
+  id              String       @id @default(uuid())
+  subscriptionId  String
+  subscription    Subscription @relation(fields: [subscriptionId], references: [id])
+  razorpayEventId String?      @unique
+  eventType       String
+  payload         Json?
+  createdAt       DateTime     @default(now())
+}
+
+model BillingCycle {
+  id              String       @id @default(uuid())
+  subscriptionId  String
+  subscription    Subscription @relation(fields: [subscriptionId], references: [id])
+  cycleNumber     Int
+  status          String
+  amount          Decimal      @db.Decimal(10, 2)
+  billingDate     DateTime
+  paidAt          DateTime?
+  
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+}
+
+enum DeliveryStatus {
+  SCHEDULED
+  ASSIGNED
+  OUT_FOR_DELIVERY
+  DELIVERED
+  PARTIAL
+  FAILED
+  CANCELLED
+  RESCHEDULED
+}
+
+model DeliverySchedule {
+  id                    String                @id @default(uuid())
+  orderId               String
+  order                 Order                 @relation(fields: [orderId], references: [id])
+  addressId             String
+  address               Address               @relation(fields: [addressId], references: [id])
+  
+  scheduledDate         DateTime
+  scheduledCans         Int
+  deliveredCans         Int                   @default(0)
+  status                DeliveryStatus        @default(SCHEDULED)
+  
+  driverId              String?
+  assignedAt            DateTime?
+  outForDeliveryAt      DateTime?
+  deliveredAt           DateTime?
+  
+  confirmations         DeliveryConfirmation[]
+  attempts              DeliveryAttempt[]
+  
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+}
+
+model DeliveryAttempt {
+  id                  String           @id @default(uuid())
+  deliveryScheduleId  String
+  deliverySchedule    DeliverySchedule @relation(fields: [deliveryScheduleId], references: [id])
+  driverId            String
+  attemptedAt         DateTime         @default(now())
+  status              DeliveryStatus
+  reason              String?
+}
+
+model DeliveryConfirmation {
+  id                  String           @id @default(uuid())
+  deliveryScheduleId  String
+  deliverySchedule    DeliverySchedule @relation(fields: [deliveryScheduleId], references: [id])
+  customerConfirmedAt DateTime?
+  proofImageUrl       String?
+  remarks             String?
+  createdAt           DateTime         @default(now())
+}
+
+model Invoice {
+  id                  String   @id @default(uuid())
+  invoiceNumber       String   @unique
+  orderId             String
+  order               Order    @relation(fields: [orderId], references: [id])
+  subtotal            Decimal  @db.Decimal(10, 2)
+  taxAmount           Decimal  @db.Decimal(10, 2)
+  total               Decimal  @db.Decimal(10, 2)
+  razorpayPaymentId   String?
+  generatedAt         DateTime @default(now())
+}
+
+model Notification {
+  id                String          @id @default(uuid())
+  customerProfileId String
+  customerProfile   CustomerProfile @relation(fields: [customerProfileId], references: [id])
+  eventType         String
+  title             String
+  message           String
+  isRead            Boolean         @default(false)
+  channels          Json            // e.g. ["IN_APP", "EMAIL"]
+  createdAt         DateTime        @default(now())
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  actorId     String
+  actor       User     @relation("UserAuditLogs", fields: [actorId], references: [id])
+  actorRole   Role
+  action      String
+  entity      String
+  entityId    String
+  metadata    Json?
+  ipAddress   String?
+  createdAt   DateTime @default(now())
+}
+
+model RefreshToken {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token       String   @unique
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime @default(now())
+}
